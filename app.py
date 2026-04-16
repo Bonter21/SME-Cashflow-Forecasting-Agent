@@ -272,6 +272,154 @@ def create_trend_chart(daily_df):
     return fig
 
 
+def generate_conclusion(predictions, current_balance, daily_df, prediction_days):
+    if not predictions:
+        return {
+            "status": "neutral",
+            "title": "⚠️ Insufficient Data",
+            "message": "Not enough historical data to generate a reliable prediction. Please upload more transaction data (at least 7 days).",
+            "recommendations": [
+                "Upload more historical transactions",
+                "Ensure data covers at least one month",
+            ],
+        }
+
+    future_balance = predictions["balances"][-1]
+    min_future = min(predictions["balances"])
+    max_future = max(predictions["balances"])
+    avg_daily = predictions["avg_daily"]
+    trend = predictions["trend"]
+
+    balance_change = future_balance - current_balance
+    change_percent = (
+        (balance_change / abs(current_balance)) * 100 if current_balance != 0 else 0
+    )
+
+    recent_volatility = daily_df["daily_change"].std()
+    avg_daily_abs = abs(daily_df["daily_change"].mean())
+    volatility_ratio = recent_volatility / avg_daily_abs if avg_daily_abs > 0 else 0
+
+    positive_days = sum(1 for p in predictions["predictions"] if p > 0)
+    negative_days = sum(1 for p in predictions["predictions"] if p < 0)
+
+    if trend == "up" and balance_change > 0:
+        if change_percent > 20:
+            status = "excellent"
+            title = "📈 Excellent Cashflow Outlook"
+            message = f"Your cashflow is projected to GROW significantly over the next {prediction_days} days. Your balance is expected to increase by ${balance_change:,.2f} ({change_percent:.1f}%)."
+            recommendations = [
+                "Consider investing excess cash in growth opportunities",
+                "Build additional cash reserves for future needs",
+                "Explore expansion opportunities",
+            ]
+        else:
+            status = "good"
+            title = "📈 Positive Cashflow Trend"
+            message = f"Your cashflow shows a healthy upward trend. Balance is projected to grow by ${balance_change:,.2f} ({change_percent:.1f}%) over {prediction_days} days."
+            recommendations = [
+                "Continue current business practices",
+                "Monitor trends monthly",
+                "Consider modest investments",
+            ]
+    elif trend == "down" and balance_change < 0:
+        if abs(change_percent) > 20 or min_future < 0:
+            status = "critical"
+            title = "📉 Critical Cashflow Alert"
+            message = f"WARNING: Your cashflow is declining significantly. Balance may drop by ${abs(balance_change):,.2f} and could go as low as ${min_future:,.2f}. Immediate action required!"
+            recommendations = [
+                "URGENT: Review and reduce non-essential expenses",
+                "Accelerate accounts receivable collection",
+                "Negotiate extended payment terms with suppliers",
+                "Consider short-term financing options",
+                "Delay major capital expenditures",
+            ]
+        else:
+            status = "warning"
+            title = "📉 Declining Cashflow"
+            message = f"Your cashflow shows a downward trend. Balance is expected to decrease by ${abs(balance_change):,.2f} ({abs(change_percent):.1f}%) over {prediction_days} days."
+            recommendations = [
+                "Review recent expenses for potential cuts",
+                "Follow up on outstanding invoices",
+                "Monitor cashflow weekly",
+                "Prepare contingency plans",
+            ]
+    else:
+        status = "stable"
+        title = "➡️ Stable Cashflow"
+        message = f"Your cashflow is expected to remain relatively stable over the next {prediction_days} days, with minimal change of ${balance_change:,.2f}."
+        recommendations = [
+            "Maintain current financial practices",
+            "Document all transactions for better tracking",
+            "Look for opportunities to increase revenue",
+        ]
+
+    if volatility_ratio > 1.5:
+        message += f"\n\n⚠️ Note: High volatility detected (ratio: {volatility_ratio:.2f}). Predictions may vary significantly."
+        recommendations.append("Build extra buffer for unexpected expenses")
+
+    if negative_days > positive_days * 1.5:
+        message += f"\n\n⚠️ Note: More expense days ({negative_days}) than income days ({positive_days}) predicted."
+
+    return {
+        "status": status,
+        "title": title,
+        "message": message,
+        "recommendations": recommendations,
+        "balance_change": balance_change,
+        "change_percent": change_percent,
+        "min_future": min_future,
+        "max_future": max_future,
+        "positive_days": positive_days,
+        "negative_days": negative_days,
+    }
+
+
+def display_conclusion(conclusion):
+    status_colors = {
+        "excellent": "#228B22",
+        "good": "#32CD32",
+        "stable": "#90EE90",
+        "warning": "#FFA500",
+        "critical": "#DC143C",
+        "neutral": "#808080",
+    }
+
+    color = status_colors.get(conclusion["status"], COLORS["primary"])
+
+    st.markdown(
+        f"""
+    <div style="
+        background: linear-gradient(135deg, {color}15, {color}25);
+        border: 2px solid {color};
+        border-radius: 15px;
+        padding: 25px;
+        margin: 20px 0;
+    ">
+        <h2 style="color: {color}; margin-top: 0;">{conclusion["title"]}</h2>
+        <p style="font-size: 16px; line-height: 1.6;">{conclusion["message"]}</p>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(f"### 💡 Recommendations")
+    for i, rec in enumerate(conclusion["recommendations"], 1):
+        st.markdown(
+            f"""
+        <div style="
+            background: {COLORS["light_bg"]};
+            border-left: 4px solid {color};
+            padding: 12px 15px;
+            margin: 8px 0;
+            border-radius: 0 8px 8px 0;
+        ">
+            <strong>{i}.</strong> {rec}
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+
+
 def main():
     apply_green_theme()
 
@@ -363,6 +511,13 @@ def main():
                     unsafe_allow_html=True,
                 )
 
+                conclusion = generate_conclusion(
+                    predictions, current_balance, daily_df, prediction_days
+                )
+
+                st.markdown("### 🎯 AI Conclusion")
+                display_conclusion(conclusion)
+
             st.markdown("### 📈 Cashflow Timeline")
             chart = create_chart(daily_df, predictions, prediction_days)
             st.plotly_chart(chart, use_container_width=True)
@@ -376,7 +531,9 @@ def main():
                 st.markdown("### 📋 Data Preview")
                 st.dataframe(processed_df.tail(10), use_container_width=True)
 
-            st.markdown("### 💾 Download Forecast")
+            st.markdown("### 💾 Download Reports")
+            col_download1, col_download2 = st.columns(2)
+
             if predictions:
                 forecast_df = pd.DataFrame(
                     {
@@ -386,12 +543,67 @@ def main():
                     }
                 )
                 csv = forecast_df.to_csv(index=False)
-                st.download_button(
-                    label="📥 Download Forecast CSV",
-                    data=csv,
-                    file_name="cashflow_forecast.csv",
-                    mime="text/csv",
+                with col_download1:
+                    st.download_button(
+                        label="📥 Download Forecast CSV",
+                        data=csv,
+                        file_name="cashflow_forecast.csv",
+                        mime="text/csv",
+                    )
+
+                conclusion = generate_conclusion(
+                    predictions, current_balance, daily_df, prediction_days
                 )
+
+                report_lines = [
+                    "=" * 50,
+                    "CASHFLOW PREDICTION REPORT",
+                    "=" * 50,
+                    f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                    f"Prediction Period: {prediction_days} days",
+                    "-" * 50,
+                    "",
+                    "SUMMARY",
+                    "-" * 50,
+                    f"Current Balance: ${current_balance:,.2f}",
+                    f"Predicted Balance ({prediction_days}d): ${predictions['balances'][-1]:,.2f}",
+                    f"Lowest Predicted: ${min(predictions['balances']):,.2f}",
+                    f"Highest Predicted: ${max(predictions['balances']):,.2f}",
+                    f"Daily Trend: ${predictions['avg_daily']:,.2f} ({predictions['trend']})",
+                    "",
+                    "=" * 50,
+                    "AI CONCLUSION",
+                    "=" * 50,
+                    f"Status: {conclusion['title']}",
+                    "",
+                    "Analysis:",
+                    conclusion["message"],
+                    "",
+                    "-" * 50,
+                    "Recommendations:",
+                ]
+                for i, rec in enumerate(conclusion["recommendations"], 1):
+                    report_lines.append(f"  {i}. {rec}")
+
+                report_lines.extend(
+                    [
+                        "",
+                        "-" * 50,
+                        "Note: This is an AI-generated prediction for reference only.",
+                        "Consult a financial advisor for important business decisions.",
+                        "=" * 50,
+                    ]
+                )
+
+                report_text = "\n".join(report_lines)
+
+                with col_download2:
+                    st.download_button(
+                        label="📄 Download Conclusion Report",
+                        data=report_text,
+                        file_name="cashflow_conclusion_report.txt",
+                        mime="text/plain",
+                    )
 
         except Exception as e:
             st.error(f"Error processing file: {str(e)}")
