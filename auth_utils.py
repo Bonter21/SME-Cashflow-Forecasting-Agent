@@ -1,13 +1,11 @@
-import streamlit as st
 import hashlib
 import sqlite3
 import uuid
 import time
-from datetime import datetime, timedelta
 import smtplib
+from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import os
 
 DB_PATH = "users.db"
 

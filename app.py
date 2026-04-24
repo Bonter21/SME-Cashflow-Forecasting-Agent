@@ -16,19 +16,9 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
-from reportlib import auth_utils as auth
-from reportlib.auth_utils import (
-    get_user_by_email, create_user, verify_login, create_reset_token,
-    reset_password, get_user_stats, update_prediction_count, delete_user
-)
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email import encoders
-import warnings
-warnings.filterwarnings('ignore')
+import auth_utils as auth
 
-SMTP_CONFIG = {
+PRICING_TIERS = {
     'server': os.getenv('SMTP_SERVER', ''),
     'port': int(os.getenv('SMTP_PORT', 587)),
     'sender': os.getenv('SENDER_EMAIL', ''),
@@ -41,6 +31,22 @@ PRICING_TIERS = {
     'pro': {'predictions': 100, 'pdf': True, 'arima': True, 'email': False, 'price': 9.99},
     'enterprise': {'predictions': -1, 'pdf': True, 'arima': True, 'email': True, 'price': 49}
 }
+
+SMTP_CONFIG = {
+    'server': os.getenv('SMTP_SERVER', ''),
+    'port': int(os.getenv('SMTP_PORT', 587)),
+    'sender': os.getenv('SENDER_EMAIL', ''),
+    'password': os.getenv('SENDER_PASSWORD', ''),
+    'reset_url': os.getenv('RESET_URL', 'https://your-app.streamlit.app')
+}
+
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+import warnings
+warnings.filterwarnings('ignore')
 
 try:
     from statsmodels.tsa.arima.model import ARIMA
@@ -56,14 +62,10 @@ st.set_page_config(page_title="CashFlow Predictor Pro", page_icon="💰", layout
     })
 
 st.markdown("""
-    <link rel="manifest" href="/manifest.json">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="theme-color" content="#228B22">
-    <meta name="description" content="AI-Powered Cashflow Forecasting for Small Businesses">
-    <link rel="apple-touch-icon" href="/icon.png">
 """, unsafe_allow_html=True)
 
 THEMES = {
