@@ -114,13 +114,44 @@ future_balance = last_balance + Σ(predicted_daily_change × days)
 | Warning | Trend down, <20% decrease |
 | Critical | Trend down, >20% decrease OR negative balance |
 
+## 📱 Mobile Support
+
+### Progressive Web App (PWA)
+
+The app is mobile-optimized and can be installed on your phone:
+
+1. Open the app in Chrome/Safari on your phone
+2. Tap the **Share/Menu** button
+3. Select **"Add to Home Screen"**
+4. The app appears like a native mobile app!
+
+### Mobile Features
+
+- ✅ Responsive design for all screen sizes
+- ✅ Touch-optimized buttons (44px min)
+- ✅ Dark mode support
+- ✅ Mobile file upload
+- ✅ Download reports
+- ✅ Email notifications
+- ✅ Collapsible sidebar
+- ✅ Sticky headers
+
+### Convert to App Store
+
+For full iOS/Android app store deployment, use:
+- [PWABuilder](https://pwabuilder.com) - Free conversion
+- [FlutterFlow](https://flutterflow.io) - No-code builder
+- [Thunkable](https://thunkable.com) - Cross-platform
+
 ## Tech Stack
 
-- **Frontend**: Streamlit
+- **Frontend**: Streamlit (Mobile-Ready)
 - **Data Processing**: Pandas, NumPy
-- **Machine Learning**: Scikit-learn (LinearRegression)
+- **Machine Learning**: Scikit-learn, StatsModels (ARIMA)
 - **Visualization**: Plotly
 - **Excel Processing**: OpenPyXL
+- **PDF Reports**: ReportLab
+- **Email**: SMTP
 
 ## Installation
 

@@ -16,13 +16,31 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlib import auth_utils as auth
+from reportlib.auth_utils import (
+    get_user_by_email, create_user, verify_login, create_reset_token,
+    reset_password, get_user_stats, update_prediction_count, delete_user
+)
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
 from email import encoders
 import warnings
 warnings.filterwarnings('ignore')
+
+SMTP_CONFIG = {
+    'server': os.getenv('SMTP_SERVER', ''),
+    'port': int(os.getenv('SMTP_PORT', 587)),
+    'sender': os.getenv('SENDER_EMAIL', ''),
+    'password': os.getenv('SENDER_PASSWORD', ''),
+    'reset_url': os.getenv('RESET_URL', 'https://your-app.streamlit.app')
+}
+
+PRICING_TIERS = {
+    'free': {'predictions': 10, 'pdf': False, 'arima': False, 'email': False},
+    'pro': {'predictions': 100, 'pdf': True, 'arima': True, 'email': False, 'price': 9.99},
+    'enterprise': {'predictions': -1, 'pdf': True, 'arima': True, 'email': True, 'price': 49}
+}
 
 try:
     from statsmodels.tsa.arima.model import ARIMA
@@ -31,7 +49,22 @@ try:
 except:
     STATSMODELS_AVAILABLE = False
 
-st.set_page_config(page_title="CashFlow Predictor Pro", page_icon="💰", layout="wide")
+st.set_page_config(page_title="CashFlow Predictor Pro", page_icon="💰", layout="wide", menu_items={
+        'Get Help': 'https://streamlit.io',
+        'Report a bug': 'https://github.com/Bonter21/SME-Cashflow-Forecasting-Agent/issues',
+        'About': '# CashFlow Predictor Pro - Commercial Edition'
+    })
+
+st.markdown("""
+    <link rel="manifest" href="/manifest.json">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#228B22">
+    <meta name="description" content="AI-Powered Cashflow Forecasting for Small Businesses">
+    <link rel="apple-touch-icon" href="/icon.png">
+""", unsafe_allow_html=True)
 
 THEMES = {
     "light": {
@@ -64,13 +97,205 @@ if "dark_mode" not in st.session_state:
 def get_colors():
     return THEMES[st.session_state.theme]
 
+def init_auth_state():
+    if "user" not in st.session_state:
+        st.session_state.user = None
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+    if "auth_mode" not in st.session_state:
+        st.session_state.auth_mode = "login"
+
+def login_ui():
+    COLORS = get_colors()
+    st.markdown(f"""
+    <div style="text-align: center; padding: 40px 20px;">
+        <h1 style="color: {COLORS['primary']};">💰 CashFlow Predictor Pro</h1>
+        <p style="color: {COLORS['text']}; font-size: 18px;">AI-Powered Cashflow Forecasting</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    tab1, tab2 = st.tabs(["🔐 Login", "📝 Sign Up"])
+    
+    with tab1:
+        st.markdown("### Welcome Back")
+        email = st.text_input("📧 Email", key="login_email")
+        password = st.text_input("🔒 Password", type="password", key="login_password")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Login", use_container_width=True):
+                if email and password:
+                    success, result = verify_login(email, password)
+                    if success:
+                        st.session_state.user = result
+                        st.session_state.logged_in = True
+                        st.success("✅ Login successful!")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {result}")
+                else:
+                    st.warning("Please enter email and password")
+        
+        with col2:
+            if st.button("Forgot Password?", use_container_width=True):
+                if email:
+                    token, _ = create_reset_token(email)
+                    if token and SMTP_CONFIG['server']:
+                        smtp_cfg = SMTP_CONFIG.copy()
+                        smtp_cfg['reset_url'] = SMTP_CONFIG['reset_url']
+                        success, msg = auth.send_reset_email(email, token, smtp_cfg)
+                        if success:
+                            st.success("📧 Check your email for reset link")
+                        else:
+                            st.info("💡 Password reset link generated (configure SMTP for email)")
+                            st.code(f"Reset URL: {SMTP_CONFIG['reset_url']}?token={token}")
+                    else:
+                        st.info("💡 Enter your email and click to generate reset link")
+                else:
+                    st.warning("Enter your email first")
+        
+        if st.button("🔐 Demo Login (Try Free)", use_container_width=True):
+            st.session_state.user = {"email": "demo@example.com", "subscription_tier": "free"}
+            st.session_state.logged_in = True
+            st.success("✅ Demo mode activated!")
+            st.rerun()
+    
+    with tab2:
+        st.markdown("### Create Account")
+        new_email = st.text_input("📧 Email", key="signup_email")
+        new_password = st.text_input("🔒 Password (min 8 chars)", type="password", key="signup_password")
+        confirm_password = st.text_input("🔒 Confirm Password", type="password", key="signup_confirm")
+        
+        agree_terms = st.checkbox("I agree to the [Terms of Service](TOS.md) and [Privacy Policy](PRIVACY.md)")
+        
+        if st.button("Create Account", use_container_width=True):
+            if not agree_terms:
+                st.warning("Please agree to Terms of Service")
+            elif new_password != confirm_password:
+                st.error("❌ Passwords don't match")
+            elif len(new_password) < 8:
+                st.error("❌ Password must be at least 8 characters")
+            else:
+                success, result = create_user(new_email, new_password)
+                if success:
+                    st.success("✅ Account created! Please login.")
+                    st.session_state.auth_mode = "login"
+                    st.rerun()
+                else:
+                    st.error(f"❌ {result}")
+
+def profile_ui():
+    COLORS = get_colors()
+    st.markdown("### 👤 My Profile")
+    
+    user = st.session_state.user
+    stats = get_user_stats(user['id']) if user and 'id' in user else {"predictions_used": 0, "subscription_tier": "free", "total_predictions": 0}
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("📧 Email", user.get('email', 'N/A')[:25] if user else 'N/A')
+    with col2:
+        st.metric("📦 Plan", stats['subscription_tier'].upper())
+    with col3:
+        tier_limit = "∞" if stats['subscription_tier'] != 'free' else str(PRICING_TIERS['free']['predictions'])
+        st.metric("📊 Usage", f"{stats['predictions_used']}/{tier_limit}")
+    
+    st.markdown("### 📈 Upgrade Plan")
+    
+    tier_col1, tier_col2, tier_col3 = st.columns(3)
+    with tier_col1:
+        st.markdown(f"""
+        <div style="border: 2px solid {COLORS['border']}; border-radius: 10px; padding: 20px; text-align: center;">
+            <h3>🆓 Free</h3>
+            <h2>$0</h2>
+            <p>{PRICING_TIERS['free']['predictions']} predictions/mo</p>
+            <p>{PRICING_TIERS['free']['pdf'] and 'PDF Reports ❌' or 'PDF Reports ❌'}</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with tier_col2:
+        st.markdown(f"""
+        <div style="border: 3px solid {COLORS['primary']}; border-radius: 10px; padding: 20px; text-align: center; background: {COLORS['light_bg']};">
+            <h3>⭐ Pro</h3>
+            <h2>$9.99/mo</h2>
+            <p>{PRICING_TIERS['pro']['predictions']} predictions/mo</p>
+            <p>PDF Reports ✅</p>
+            <p>ARIMA Models ✅</p>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("Upgrade to Pro", use_container_width=True):
+            st.info("💳 Stripe integration coming soon!")
+    
+    with tier_col3:
+        st.markdown(f"""
+        <div style="border: 2px solid {COLORS['border']}; border-radius: 10px; padding: 20px; text-align: center;">
+            <h3>🏢 Enterprise</h3>
+            <h2>$49/mo</h2>
+            <p>Unlimited predictions</p>
+            <p>All Pro features</p>
+            <p>Email Alerts ✅</p>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("Contact Sales", use_container_width=True):
+            st.info("📧 Email: sales@example.com")
+    
+    st.markdown("### ⚙️ Account Settings")
+    
+    if st.button("📧 Change Password"):
+        st.warning("Feature coming soon")
+    
+    if st.button("🗑️ Delete Account"):
+        st.error("⚠️ This will permanently delete your account and all data.")
+        if st.button("⚠️ Yes, Delete Permanently"):
+            delete_user(user['id'])
+            st.session_state.user = None
+            st.session_state.logged_in = False
+            st.success("Account deleted.")
+            st.rerun()
+    
+    if st.button("🚪 Logout"):
+        st.session_state.user = None
+        st.session_state.logged_in = False
+        st.rerun()
+
 def apply_theme():
     COLORS = get_colors()
     st.markdown(
         f"""
         <style>
+        /* Mobile Optimization */
+        @media (max-width: 768px) {{
+            .stApp {{
+                padding: 0 !important;
+            }}
+            .main-header {{
+                padding: 15px !important;
+                margin-bottom: 10px !important;
+            }}
+            .main-header h1 {{
+                font-size: 24px !important;
+            }}
+            div[data-testid="stMetric"] {{
+                padding: 10px !important;
+            }}
+            .stButton>button {{
+                padding: 8px 15px !important;
+                font-size: 14px !important;
+            }}
+        }}
+        /* Mobile Touch Optimization */
+        @media (hover: none) {{
+            button {{ 
+                min-height: 44px;
+                touch-action: manipulation;
+            }}
+            .stDownloadButton > button {{
+                min-height: 48px;
+            }}
+        }}
         .stApp {{
             background-color: {COLORS["background"]};
+            -webkit-tap-highlight-color: transparent;
         }}
         .main-header {{
             background: linear-gradient(135deg, {COLORS["primary"]}, {COLORS["secondary"]});
@@ -90,6 +315,7 @@ def apply_theme():
         }}
         .stSidebar {{
             background-color: {COLORS["light_bg"]};
+            width: 280px !important;
         }}
         .upload-zone {{
             border: 3px dashed {COLORS["primary"]};
@@ -153,6 +379,16 @@ def apply_theme():
         @keyframes spin {{
             0% {{ transform: rotate(0deg); }}
             100% {{ transform: rotate(360deg); }}
+        }}
+        /* Mobile Sticky Header */
+        .st-emotion-cache-1w0r9p2 {{
+            position: sticky !important;
+            top: 0 !important;
+            z-index: 100 !important;
+        }}
+        /* Mobile Charts */
+        .js-plotly-plot {{
+            max-width: 100% !important;
         }}
         </style>
         """,
@@ -715,9 +951,16 @@ def generate_pdf_report(predictions, current_balance, daily_df, prediction_days,
     return buffer.getvalue()
 
 def main():
+    init_auth_state()
     apply_theme()
     
+    if not st.session_state.logged_in:
+        login_ui()
+        return
+    
     with st.sidebar:
+        st.markdown(f"### 👤 {st.session_state.user.get('email', 'User')}")
+        
         st.markdown("### 🎨 Settings")
         if st.toggle("🌙 Dark Mode", value=st.session_state.dark_mode):
             st.session_state.theme = "dark"
@@ -752,7 +995,7 @@ def main():
         email_enabled = st.checkbox("Enable email alerts")
         email_recipient = ""
         if email_enabled:
-            email_recipient = st.text_input("Email address")
+            email_recipient = st.text_input("Email address", value=st.session_state.user.get('email', ''))
             if st.button("Send Test Email"):
                 if email_recipient:
                     success, message = send_email_alert(email_recipient, "Test from CashFlow Predictor", "<p>This is a test email from CashFlow Predictor Pro.</p>")
@@ -766,10 +1009,22 @@ def main():
             if use_arima and not STATSMODELS_AVAILABLE:
                 st.warning("ARIMA requires statsmodels. Install: pip install statsmodels")
         
+        if st.button("👤 Profile"):
+            st.session_state.page = "profile"
+        
+        if st.button("🚪 Logout", use_container_width=True):
+            st.session_state.user = None
+            st.session_state.logged_in = False
+            st.rerun()
+        
         if st.button("🔄 Reset", use_container_width=True):
             st.cache_data.clear()
             st.session_state.clear()
             st.rerun()
+    
+    if st.session_state.get('page') == 'profile':
+        profile_ui()
+        return
     
     st.markdown("""
     <div class="main-header">
