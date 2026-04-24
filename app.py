@@ -1,6 +1,9 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import os
+import warnings
+warnings.filterwarnings('ignore')
 from datetime import datetime, timedelta
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
@@ -16,15 +19,12 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
-import auth_utils as auth
-
-PRICING_TIERS = {
-    'server': os.getenv('SMTP_SERVER', ''),
-    'port': int(os.getenv('SMTP_PORT', 587)),
-    'sender': os.getenv('SENDER_EMAIL', ''),
-    'password': os.getenv('SENDER_PASSWORD', ''),
-    'reset_url': os.getenv('RESET_URL', 'https://your-app.streamlit.app')
-}
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+import auth_utils
 
 PRICING_TIERS = {
     'free': {'predictions': 10, 'pdf': False, 'arima': False, 'email': False},
@@ -34,19 +34,11 @@ PRICING_TIERS = {
 
 SMTP_CONFIG = {
     'server': os.getenv('SMTP_SERVER', ''),
-    'port': int(os.getenv('SMTP_PORT', 587)),
+    'port': int(os.getenv('SMTP_PORT', 587) or 587),
     'sender': os.getenv('SENDER_EMAIL', ''),
     'password': os.getenv('SENDER_PASSWORD', ''),
     'reset_url': os.getenv('RESET_URL', 'https://your-app.streamlit.app')
 }
-
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email import encoders
-import warnings
-warnings.filterwarnings('ignore')
 
 try:
     from statsmodels.tsa.arima.model import ARIMA
@@ -127,7 +119,7 @@ def login_ui():
         with col1:
             if st.button("Login", use_container_width=True):
                 if email and password:
-                    success, result = verify_login(email, password)
+                    success, result = auth_utils.verify_login(email, password)
                     if success:
                         st.session_state.user = result
                         st.session_state.logged_in = True
@@ -141,11 +133,11 @@ def login_ui():
         with col2:
             if st.button("Forgot Password?", use_container_width=True):
                 if email:
-                    token, _ = create_reset_token(email)
+                    token, _ = auth_utils.create_reset_token(email)
                     if token and SMTP_CONFIG['server']:
                         smtp_cfg = SMTP_CONFIG.copy()
                         smtp_cfg['reset_url'] = SMTP_CONFIG['reset_url']
-                        success, msg = auth.send_reset_email(email, token, smtp_cfg)
+                        success, msg = auth_utils.send_reset_email(email, token, smtp_cfg)
                         if success:
                             st.success("📧 Check your email for reset link")
                         else:
@@ -178,7 +170,7 @@ def login_ui():
             elif len(new_password) < 8:
                 st.error("❌ Password must be at least 8 characters")
             else:
-                success, result = create_user(new_email, new_password)
+                success, result = auth_utils.create_user(new_email, new_password)
                 if success:
                     st.success("✅ Account created! Please login.")
                     st.session_state.auth_mode = "login"
@@ -191,7 +183,7 @@ def profile_ui():
     st.markdown("### 👤 My Profile")
     
     user = st.session_state.user
-    stats = get_user_stats(user['id']) if user and 'id' in user else {"predictions_used": 0, "subscription_tier": "free", "total_predictions": 0}
+    stats = auth_utils.get_user_stats(user['id']) if user and 'id' in user else {"predictions_used": 0, "subscription_tier": "free", "total_predictions": 0}
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -249,7 +241,7 @@ def profile_ui():
     if st.button("🗑️ Delete Account"):
         st.error("⚠️ This will permanently delete your account and all data.")
         if st.button("⚠️ Yes, Delete Permanently"):
-            delete_user(user['id'])
+            auth_utils.delete_user(user['id'])
             st.session_state.user = None
             st.session_state.logged_in = False
             st.success("Account deleted.")
@@ -565,10 +557,10 @@ def predict_sarima(daily_df, days=30):
         return None
 
 def send_email_alert(recipient, subject, body, attachment=None, attachment_name=None):
-    smtp_server = st.secrets.get("SMTP_SERVER", "") if hasattr(st, "secrets") else ""
-    smtp_port = st.secrets.get("SMTP_PORT", 587) if hasattr(st, "secrets") else 587
-    sender_email = st.secrets.get("SENDER_EMAIL", "") if hasattr(st, "secrets") else ""
-    sender_password = st.secrets.get("SENDER_PASSWORD", "") if hasattr(st, "secrets") else ""
+    smtp_server = SMTP_CONFIG['server']
+    smtp_port = SMTP_CONFIG['port']
+    sender_email = SMTP_CONFIG['sender']
+    sender_password = SMTP_CONFIG['password']
     
     if not smtp_server or not sender_email:
         return False, "Email not configured. Set SMTP secrets in Streamlit settings."
