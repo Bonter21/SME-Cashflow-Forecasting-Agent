@@ -16,6 +16,20 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+import warnings
+warnings.filterwarnings('ignore')
+
+try:
+    from statsmodels.tsa.arima.model import ARIMA
+    from statsmodels.tsa.statespace.sarimax import SARIMAX
+    STATSMODELS_AVAILABLE = True
+except:
+    STATSMODELS_AVAILABLE = False
 
 st.set_page_config(page_title="CashFlow Predictor Pro", page_icon="💰", layout="wide")
 
@@ -258,6 +272,157 @@ def detect_anomalies(daily_df, threshold=2.5):
             })
     
     return anomalies
+
+def predict_arima(daily_df, days=30):
+    if not STATSMODELS_AVAILABLE or len(daily_df) < 30:
+        return None
+    
+    try:
+        daily_df = daily_df.set_index('date')
+        model = ARIMA(daily_df['daily_change'], order=(1, 1, 1))
+        fitted = model.fit()
+        forecast = fitted.forecast(steps=days)
+        conf_int = fitted.get_forecast(steps=days).conf_int()
+        
+        last_balance = daily_df['balance'].iloc[-1]
+        predicted_balances = [last_balance]
+        current = last_balance
+        for pred in forecast:
+            current += pred
+            predicted_balances.append(current)
+        
+        return {
+            "predictions": forecast.tolist(),
+            "balances": predicted_balances[1:],
+            "confidence_upper": [b + u for b, u in zip(predicted_balances[1:], conf_int.iloc[:, 1].values)],
+            "confidence_lower": [b - l for b, l in zip(predicted_balances[1:], conf_int.iloc[:, 0].values)],
+            "avg_daily": forecast.mean(),
+        }
+    except:
+        return None
+
+def predict_sarima(daily_df, days=30):
+    if not STATSMODELS_AVAILABLE or len(daily_df) < 60:
+        return None
+    
+    try:
+        daily_df = daily_df.set_index('date')
+        model = SARIMAX(daily_df['daily_change'], order=(1, 1, 1), seasonal_order=(1, 1, 1, 7))
+        fitted = model.fit(disp=False)
+        forecast = fitted.forecast(steps=days)
+        
+        last_balance = daily_df['balance'].iloc[-1]
+        predicted_balances = [last_balance]
+        current = last_balance
+        for pred in forecast:
+            current += pred
+            predicted_balances.append(current)
+        
+        return {
+            "predictions": forecast.tolist(),
+            "balances": predicted_balances[1:],
+            "avg_daily": forecast.mean(),
+        }
+    except:
+        return None
+
+def send_email_alert(recipient, subject, body, attachment=None, attachment_name=None):
+    smtp_server = st.secrets.get("SMTP_SERVER", "") if hasattr(st, "secrets") else ""
+    smtp_port = st.secrets.get("SMTP_PORT", 587) if hasattr(st, "secrets") else 587
+    sender_email = st.secrets.get("SENDER_EMAIL", "") if hasattr(st, "secrets") else ""
+    sender_password = st.secrets.get("SENDER_PASSWORD", "") if hasattr(st, "secrets") else ""
+    
+    if not smtp_server or not sender_email:
+        return False, "Email not configured. Set SMTP secrets in Streamlit settings."
+    
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = recipient
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'html'))
+        
+        if attachment:
+            part = MIMEBase('application', 'octet-stream')
+            part.set_payload(attachment)
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', f'attachment; filename={attachment_name}')
+            msg.attach(part)
+        
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+        
+        return True, "Email sent successfully"
+    except Exception as e:
+        return False, str(e)
+
+def create_budget_alerts(daily_df, predictions, budget_threshold=1000):
+    alerts = []
+    current_balance = daily_df['balance'].iloc[-1]
+    avg_daily = daily_df['daily_change'].mean()
+    std_daily = daily_df['daily_change'].std()
+    
+    if predictions:
+        for i, (date, balance) in enumerate(zip(predictions['dates'], predictions['balances'])):
+            if balance < budget_threshold:
+                alerts.append({
+                    'date': date,
+                    'balance': balance,
+                    'alert_type': 'low_balance',
+                    'message': f"Balance (${balance:,.2f}) below threshold (${budget_threshold:,})"
+                })
+            
+            daily_change = predictions['predictions'][i] if i < len(predictions['predictions']) else 0
+            if daily_change < -abs(avg_daily) - 2 * std_daily:
+                alerts.append({
+                    'date': date,
+                    'balance': balance,
+                    'alert_type': 'high_expense',
+                    'message': f"Unusual expense: ${abs(daily_change):,.2f}"
+                })
+    
+    return alerts
+
+def compare_files(file_list):
+    if len(file_list) < 2:
+        return None
+    
+    comparisons = []
+    for i, (df, name) in enumerate(file_list):
+        processed_df, daily_df, _, _ = process_data(df)
+        current_balance = processed_df['running_balance'].iloc[-1]
+        avg_daily = daily_df['daily_change'].mean()
+        total_income = daily_df[daily_df['daily_change'] > 0]['daily_change'].sum()
+        total_expense = abs(daily_df[daily_df['daily_change'] < 0]['daily_change'].sum())
+        
+        comparisons.append({
+            'name': name,
+            'current_balance': current_balance,
+            'avg_daily': avg_daily,
+            'total_income': total_income,
+            'total_expense': total_expense,
+            'data_points': len(daily_df),
+            'daily_df': daily_df,
+        })
+    
+    if len(comparisons) >= 2:
+        max_balance = max(comparisons, key=lambda x: x['current_balance'])
+        min_balance = min(comparisons, key=lambda x: x['current_balance'])
+        best_performer = max_balance['name']
+        worst_performer = min_balance['name']
+        
+        return {
+            'files': comparisons,
+            'max_balance': max_balance['current_balance'],
+            'min_balance': min_balance['current_balance'],
+            'best_performer': best_performer,
+            'worst_performer': worst_performer,
+            'balance_diff': max_balance['current_balance'] - min_balance['current_balance'],
+        }
+    
+    return None
 
 def predict_cashflow_ensemble(daily_df, days=30):
     if len(daily_df) < 7:
@@ -563,7 +728,8 @@ def main():
         st.markdown("---")
         
         st.markdown("### 📤 Upload Data")
-        uploaded_file = st.file_uploader("Choose a file", type=["csv", "xlsx", "xls"], help="Accepts .csv, .xlsx, .xls files")
+        uploaded_files = st.file_uploader("Choose files (select multiple)", type=["csv", "xlsx", "xls"], accept_multiple_files=True)
+        uploaded_file = st.session_state.get('uploaded_file', None)
         
         prediction_days = st.slider("Prediction Period", 30, 90, 30, step=30)
         
@@ -574,18 +740,79 @@ def main():
         if goal_enabled:
             goal_amount = st.number_input("Target Balance ($)", value=0, step=1000)
         
+        st.markdown("---")
+        st.markdown("### 🔔 Budget Alerts")
+        alert_enabled = st.checkbox("Enable budget alerts")
+        alert_threshold = 0
+        if alert_enabled:
+            alert_threshold = st.number_input("Alert when balance < ($)", value=1000, step=500)
+        
+        st.markdown("---")
+        st.markdown("### 📧 Email Notifications")
+        email_enabled = st.checkbox("Enable email alerts")
+        email_recipient = ""
+        if email_enabled:
+            email_recipient = st.text_input("Email address")
+            if st.button("Send Test Email"):
+                if email_recipient:
+                    success, message = send_email_alert(email_recipient, "Test from CashFlow Predictor", "<p>This is a test email from CashFlow Predictor Pro.</p>")
+                    if success:
+                        st.success(message)
+                    else:
+                        st.warning(f"Email not configured: {message}")
+        
+        with st.expander("⚙️ ARIMA Settings"):
+            use_arima = st.checkbox("Enable ARIMA predictions")
+            if use_arima and not STATSMODELS_AVAILABLE:
+                st.warning("ARIMA requires statsmodels. Install: pip install statsmodels")
+        
         if st.button("🔄 Reset", use_container_width=True):
             st.cache_data.clear()
+            st.session_state.clear()
             st.rerun()
     
     st.markdown("""
     <div class="main-header">
         <h1>💰 CashFlow Predictor Pro</h1>
-        <p>AI-Powered Cashflow Forecasting with Ensemble Models</p>
+        <p>AI-Powered Cashflow Forecasting with Ensemble & ARIMA Models</p>
     </div>
     """, unsafe_allow_html=True)
     
-    if uploaded_file is not None:
+    if uploaded_files and len(uploaded_files) > 0:
+        if len(uploaded_files) >= 2:
+            st.markdown("### 📊 Multi-File Comparison")
+            file_data = []
+            for f in uploaded_files:
+                if f.name.endswith(".csv"):
+                    df_temp = pd.read_csv(f)
+                else:
+                    df_temp = pd.read_excel(f)
+                file_data.append((df_temp, f.name))
+            
+            comparison = compare_files(file_data)
+            
+            if comparison:
+                comp1, comp2 = st.columns(2)
+                with comp1:
+                    st.markdown(f"**🏆 Best: {comparison['best_performer']}**")
+                    st.metric("Max Balance", f"${comparison['max_balance']:,.2f}")
+                with comp2:
+                    st.markdown(f"**⚠️ Needs Attention: {comparison['worst_performer']}**")
+                    st.metric("Min Balance", f"${comparison['min_balance']:,.2f}")
+                
+                st.info(f"Difference: ${comparison['balance_diff']:,.2f}")
+                
+                st.markdown("### 📈 Comparison Chart")
+                fig_comp = go.Figure()
+                for comp in comparison['files']:
+                    fig_comp.add_trace(go.Scatter(x=comp['daily_df']['date'], y=comp['daily_df']['balance'], mode='lines', name=comp['name']))
+                fig_comp.update_layout(title="Balance Comparison", plot_bgcolor=get_colors()['chart_bg'], paper_bgcolor=get_colors()['chart_bg'], font=dict(color=get_colors()['text']))
+                st.plotly_chart(fig_comp, use_container_width=True)
+            
+            uploaded_file = uploaded_files[0]
+        else:
+            uploaded_file = uploaded_files[0]
+        
         try:
             with st.spinner("Loading file..."):
                 if uploaded_file.name.endswith(".csv"):
@@ -665,6 +892,28 @@ def main():
                     with st.expander(f"⚠️ Anomalies Detected ({len(anomalies)})"):
                         anomaly_df = pd.DataFrame(anomalies)
                         st.dataframe(anomaly_df, use_container_width=True)
+                
+                if alert_enabled and predictions:
+                    budget_alerts = create_budget_alerts(daily_df, predictions, alert_threshold)
+                    if budget_alerts:
+                        with st.expander(f"🔔 Budget Alerts ({len(budget_alerts)})"):
+                            for alert in budget_alerts[:5]:
+                                st.warning(f"📅 {alert['date'].strftime('%Y-%m-%d')}: {alert['message']}")
+                
+                if 'use_arima' in dir() and use_arima and STATSMODELS_AVAILABLE:
+                    with st.spinner("Running ARIMA model..."):
+                        arima_pred = predict_arima(daily_df, prediction_days)
+                        sarima_pred = predict_sarima(daily_df, prediction_days)
+                    
+                    if arima_pred:
+                        with st.expander("📊 ARIMA Predictions"):
+                            st.metric("ARIMA Predicted Balance", f"${arima_pred['balances'][-1]:,.2f}")
+                            st.metric("ARIMA Avg Daily", f"${arima_pred['avg_daily']:,.2f}")
+                    
+                    if sarima_pred:
+                        with st.expander("📊 SARIMA Seasonal Predictions"):
+                            st.metric("SARIMA Predicted Balance", f"${sarima_pred['balances'][-1]:,.2f}")
+                            st.metric("SARIMA Avg Daily", f"${sarima_pred['avg_daily']:,.2f}")
                 
                 conclusion = generate_conclusion(predictions, current_balance, daily_df, prediction_days, seasonality, anomalies)
                 
