@@ -168,15 +168,6 @@ openpyxl>=3.1.0
 
 MIT
 
-## Authors
+## Author
 
-Built by **Bhonda Shelton**
--Bhonda Is Studying Bcom in Financial Engineering @Great Zimbabwe University
-
--passionate about AI and Software Development,interested in Artificial intelligence and Data analysis
-
--Building real world AI solutions as well as Open to collaborations and Learning
-
--## The Ai Agent was built in collaboration with **Memory Mukondo** also a Student @Great Zimbabwe University
-
--**Memory** is Studying Bcom in Economics and Finance, She is passionate in AI Developing Argents, Bringing AI Solutions to Existance
+Built by Bonter21
