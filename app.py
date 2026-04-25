@@ -183,51 +183,82 @@ def profile_ui():
     st.markdown("### 👤 My Profile")
     
     user = st.session_state.user
-    stats = auth_utils.get_user_stats(user['id']) if user and 'id' in user else {"predictions_used": 0, "subscription_tier": "free", "total_predictions": 0}
+    user_id = user.get('id') if user else None
+    stats = auth_utils.get_user_stats(user_id) if user_id and user_id != 'demo' else {"predictions_used": 0, "subscription_tier": "free", "total_predictions": 0}
+    current_tier = stats.get('subscription_tier', 'free')
     
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("📧 Email", user.get('email', 'N/A')[:25] if user else 'N/A')
     with col2:
-        st.metric("📦 Plan", stats['subscription_tier'].upper())
+        tier_display = current_tier.upper()
+        if current_tier == 'pro':
+            tier_display = '⭐ PRO'
+        elif current_tier == 'enterprise':
+            tier_display = '🏢 ENTERPRISE'
+        st.metric("📦 Plan", tier_display)
     with col3:
-        tier_limit = "∞" if stats['subscription_tier'] != 'free' else str(PRICING_TIERS['free']['predictions'])
-        st.metric("📊 Usage", f"{stats['predictions_used']}/{tier_limit}")
+        tier_limit = "∞" if current_tier == 'enterprise' else (100 if current_tier == 'pro' else 10)
+        remaining = tier_limit - stats.get('predictions_used', 0)
+        st.metric("📊 Remaining", f"{remaining}/{tier_limit}")
     
     st.markdown("### 📈 Upgrade Plan")
     
     tier_col1, tier_col2, tier_col3 = st.columns(3)
     with tier_col1:
+        is_current = current_tier == 'free'
+        border = f"border: 3px solid {COLORS['primary']};" if is_current else ""
         st.markdown(f"""
-        <div style="border: 2px solid {COLORS['border']}; border-radius: 10px; padding: 20px; text-align: center;">
+        <div style="{border} border-radius: 10px; padding: 20px; text-align: center;">
             <h3>🆓 Free</h3>
             <h2>$0</h2>
-            <p>{PRICING_TIERS['free']['predictions']} predictions/mo</p>
-            <p>{PRICING_TIERS['free']['pdf'] and 'PDF Reports ❌' or 'PDF Reports ❌'}</p>
+            <p>10 predictions/mo</p>
+            <p>Basic features</p>
+            {is_current and '<p>✅ Current</p>' or ''}
         </div>
         """, unsafe_allow_html=True)
     
     with tier_col2:
+        is_current = current_tier == 'pro'
+        border = f"border: 3px solid {COLORS['primary']};"
         st.markdown(f"""
-        <div style="border: 3px solid {COLORS['primary']}; border-radius: 10px; padding: 20px; text-align: center; background: {COLORS['light_bg']};">
+        <div style="{border} border-radius: 10px; padding: 20px; text-align: center; background: {COLORS['light_bg']};">
             <h3>⭐ Pro</h3>
             <h2>$9.99/mo</h2>
-            <p>{PRICING_TIERS['pro']['predictions']} predictions/mo</p>
+            <p>100 predictions/mo</p>
             <p>PDF Reports ✅</p>
             <p>ARIMA Models ✅</p>
+            {is_current and '<p>✅ Current</p>' or ''}
         </div>
         """, unsafe_allow_html=True)
-        if st.button("Upgrade to Pro", use_container_width=True):
-            st.info("💳 Stripe integration coming soon!")
+        if not is_current and user_id and user_id != 'demo':
+            if st.button("💳 Upgrade to Pro", use_container_width=True):
+                try:
+                    import billing_utils
+                    url, error = billing_utils.create_checkout_session(user_id, 'pro')
+                    if url:
+                        st.markdown(f"[Click here to pay]({url})")
+                    else:
+                        st.warning("Stripe not configured. Please contact support.")
+                except Exception as e:
+                    st.warning("Stripe integration coming soon!")
     
     with tier_col3:
+        is_current = current_tier == 'enterprise'
+        border = f"border: 3px solid {COLORS['primary']};"
         st.markdown(f"""
-        <div style="border: 2px solid {COLORS['border']}; border-radius: 10px; padding: 20px; text-align: center;">
+        <div style="{border} border-radius: 10px; padding: 20px; text-align: center;">
             <h3>🏢 Enterprise</h3>
             <h2>$49/mo</h2>
-            <p>Unlimited predictions</p>
+            <p>Unlimited</p>
             <p>All Pro features</p>
-            <p>Email Alerts ✅</p>
+            <p>API Access ✅</p>
+            {is_current and '<p>✅ Current</p>' or ''}
+        </div>
+        """, unsafe_allow_html=True)
+        if not is_current and user_id and user_id != 'demo':
+            if st.button("💳 Contact Sales", use_container_width=True):
+                st.info("📧 Email: sales@cashflowpredictor.com")
         </div>
         """, unsafe_allow_html=True)
         if st.button("Contact Sales", use_container_width=True):
@@ -1332,8 +1363,15 @@ Consult a financial advisor for important decisions.
                 
                 col_pdf = st.columns(1)[0]
                 with col_pdf:
-                    pdf_data = generate_pdf_report(predictions, current_balance, daily_df, prediction_days, seasonality, anomalies, conclusion)
-                    st.download_button("📑 Download PDF Report", data=pdf_data, file_name="cashflow_report.pdf", mime="application/pdf", use_container_width=True)
+                    current_tier = stats.get('subscription_tier', 'free')
+                    if current_tier in ['pro', 'enterprise']:
+                        pdf_data = generate_pdf_report(predictions, current_balance, daily_df, prediction_days, seasonality, anomalies, conclusion)
+                        st.download_button("📑 Download PDF Report", data=pdf_data, file_name="cashflow_report.pdf", mime="application/pdf", use_container_width=True)
+                    else:
+                        st.warning("📑 PDF Reports available for Pro subscribers")
+                        if st.button("⭐ Upgrade for PDF"):
+                            st.session_state.page = "profile"
+                            st.rerun()
         
         except Exception as e:
             st.error(f"Error: {str(e)}")
