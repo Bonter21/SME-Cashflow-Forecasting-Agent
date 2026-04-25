@@ -149,7 +149,7 @@ def login_ui():
                     st.warning("Enter your email first")
         
         if st.button("🔐 Demo Login (Try Free)", use_container_width=True):
-            st.session_state.user = {"email": "demo@example.com", "subscription_tier": "free"}
+            st.session_state.user = {"id": "demo", "email": "demo@example.com", "subscription_tier": "free", "predictions_used": 0}
             st.session_state.logged_in = True
             st.success("✅ Demo mode activated!")
             st.rerun()
@@ -250,6 +250,66 @@ def profile_ui():
     if st.button("🚪 Logout"):
         st.session_state.user = None
         st.session_state.logged_in = False
+        st.rerun()
+
+def history_ui():
+    COLORS = get_colors()
+    st.markdown(f"### 📜 Prediction History")
+    
+    user = st.session_state.user
+    user_id = user.get('id') if user else None
+    
+    if not user_id or user_id == 'demo':
+        st.warning("History is only available for logged-in users. Use Demo mode for testing.")
+        if st.button("⬅️ Back to App"):
+            st.session_state.page = None
+            st.rerun()
+        return
+    
+    with st.spinner("Loading history..."):
+        history = auth_utils.get_prediction_history(user_id, limit=50)
+    
+    if not history:
+        st.info("No predictions yet. Upload a file and make your first prediction!")
+    else:
+        st.markdown(f"**Total Predictions:** {len(history)}")
+        
+        history_df = pd.DataFrame(history)
+        if 'created_at' in history_df.columns:
+            history_df['created_at'] = pd.to_datetime(history_df['created_at']).dt.strftime('%Y-%m-%d %H:%M')
+        
+        cols = st.columns(3)
+        with cols[0]:
+            st.metric("Total", len(history))
+        with cols[1]:
+            status_counts = history_df['status'].value_counts().to_dict()
+            st.metric("Excellent", status_counts.get('excellent', 0))
+        with cols[2]:
+            st.metric("Critical", status_counts.get('critical', 0))
+        
+        st.markdown("### 📊 Recent Predictions")
+        display_df = history_df[['created_at', 'file_name', 'prediction_days', 'current_balance', 'predicted_balance', 'trend', 'status']].head(10)
+        display_df['current_balance'] = display_df['current_balance'].apply(lambda x: f"${x:,.2f}" if x else "$0")
+        display_df['predicted_balance'] = display_df['predicted_balance'].apply(lambda x: f"${x:,.2f}" if x else "$0")
+        st.dataframe(display_df, use_container_width=True)
+        
+        status_icons = {'excellent': '🟢', 'good': '🟢', 'stable': '🟡', 'warning': '🟠', 'critical': '🔴', 'neutral': '⚪'}
+        st.markdown("### 📈 Status Overview")
+        
+        for idx, row in enumerate(history[:5]):
+            status = row.get('status', 'neutral')
+            icon = status_icons.get(status, '⚪')
+            trend_icon = '📈' if row.get('trend') == 'up' else '📉'
+            st.markdown(f"""
+            <div style="background: {COLORS['light_bg']}; border-left: 4px solid {COLORS['primary']}; padding: 15px; border-radius: 5px; margin: 10px 0;">
+                <strong>{icon} {row.get('conclusion', 'N/A')}</strong><br>
+                📁 {row.get('file_name', 'N/A')} | {trend_icon} {row.get('trend', 'stable').upper()}<br>
+                📅 {row.get('created_at', 'N/A')} | {row.get('prediction_days', 30)} days
+            </div>
+            """, unsafe_allow_html=True)
+    
+    if st.button("⬅️ Back to App"):
+        st.session_state.page = None
         st.rerun()
 
 def apply_theme():
@@ -1006,6 +1066,9 @@ def main():
         if st.button("👤 Profile"):
             st.session_state.page = "profile"
         
+        if st.button("📜 History"):
+            st.session_state.page = "history"
+        
         if st.button("🚪 Logout", use_container_width=True):
             st.session_state.user = None
             st.session_state.logged_in = False
@@ -1018,6 +1081,10 @@ def main():
     
     if st.session_state.get('page') == 'profile':
         profile_ui()
+        return
+    
+    if st.session_state.get('page') == 'history':
+        history_ui()
         return
     
     st.markdown("""
@@ -1168,6 +1235,19 @@ def main():
                 
                 st.markdown("### 🎯 AI Conclusion")
                 display_conclusion(conclusion)
+                
+                # Save prediction to history
+                if predictions and st.session_state.get('logged_in') and st.session_state.get('user'):
+                    user_id = st.session_state.user.get('id')
+                    if user_id and user_id != 'demo':
+                        prediction_data = {
+                            'days': prediction_days,
+                            'current_balance': current_balance,
+                            'predicted_balance': future_balance,
+                            'trend': predictions['trend']
+                        }
+                        auth_utils.save_prediction(user_id, uploaded_file.name if uploaded_file else 'N/A', prediction_data, conclusion)
+                        st.toast("💾 Prediction saved to history")
             
             st.markdown("### 📈 Cashflow Analysis")
             st.plotly_chart(create_advanced_chart(daily_df, predictions), use_container_width=True)

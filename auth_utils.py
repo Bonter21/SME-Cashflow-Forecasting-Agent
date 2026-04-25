@@ -1,172 +1,97 @@
-import hashlib
-import sqlite3
-import uuid
-import time
-import smtplib
+"""
+Supabase Authentication for CashFlow Predictor Pro
+"""
+import streamlit as st
+from supabase import create_client, Client
 from datetime import datetime, timedelta
+import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-DB_PATH = "users.db"
+PRICING_TIERS = {
+    'free': {'predictions': 10, 'pdf': False, 'arima': False, 'email': False},
+    'pro': {'predictions': 100, 'pdf': True, 'arima': True, 'email': False, 'price': 9.99},
+    'enterprise': {'predictions': -1, 'pdf': True, 'arima': True, 'email': True, 'price': 49}
+}
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_login TIMESTAMP,
-            is_active BOOLEAN DEFAULT 1,
-            subscription_tier TEXT DEFAULT 'free',
-            predictions_used INTEGER DEFAULT 0,
-            reset_token TEXT,
-            reset_token_expires TIMESTAMP
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS prediction_logs (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            file_name TEXT,
-            prediction_days INTEGER,
-            predicted_balance REAL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-def hash_password(password, salt=None):
-    if salt is None:
-        salt = str(uuid.uuid4())
-    hash_obj = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000)
-    return f"{salt}${hash_obj.hex()}", salt
-
-def verify_password(password, stored_hash):
+def get_supabase_client():
     try:
-        salt, _ = stored_hash.split('$')
-        new_hash, _ = hash_password(password, salt)
-        return new_hash == stored_hash
+        if hasattr(st, 'secrets') and 'SUPABASE_URL' in st.secrets:
+            supabase_url = st.secrets['SUPABASE_URL']
+            supabase_key = st.secrets['SUPABASE_KEY']
+            return create_client(supabase_url, supabase_key)
     except:
-        return False
+        pass
+    return None
 
-def generate_token():
-    return str(uuid.uuid4()) + str(int(time.time()))
+# ============ USER FUNCTIONS ============
 
 def get_user_by_email(email):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE email = ?", (email,))
-    user = c.fetchone()
-    conn.close()
-    if user:
-        return {
-            "id": user[0], "email": user[1], "password_hash": user[2],
-            "created_at": user[3], "last_login": user[4], "is_active": user[5],
-            "subscription_tier": user[6], "predictions_used": user[7]
-        }
+    supabase = get_supabase_client()
+    if not supabase:
+        return None
+    try:
+        response = supabase.table('users').select('*').eq('email', email).execute()
+        if response.data:
+            return response.data[0]
+    except:
+        pass
     return None
 
 def create_user(email, password):
+    supabase = get_supabase_client()
+    if not supabase:
+        return False, "Supabase not configured"
     try:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        user_id = str(uuid.uuid4())
-        password_hash, _ = hash_password(password)
-        c.execute("""
-            INSERT INTO users (id, email, password_hash, subscription_tier)
-            VALUES (?, ?, ?, 'free')
-        """, (user_id, email, password_hash))
-        conn.commit()
-        conn.close()
-        return True, user_id
-    except sqlite3.IntegrityError:
-        return False, "Email already exists"
+        response = supabase.auth.sign_up({
+            "email": email,
+            "password": password
+        })
+        if response.user:
+            user_data = {
+                "id": response.user.id,
+                "email": email,
+                "subscription_tier": "free",
+                "predictions_used": 0,
+                "created_at": datetime.now().isoformat()
+            }
+            supabase.table('users').insert(user_data).execute()
+            return True, response.user.id
+        return False, "Signup failed"
+    except Exception as e:
+        return False, str(e)
 
 def verify_login(email, password):
-    user = get_user_by_email(email)
-    if user and user["is_active"]:
-        if verify_password(password, user["password_hash"]):
-            update_last_login(user["id"])
+    supabase = get_supabase_client()
+    if not supabase:
+        return False, "Supabase not configured"
+    try:
+        response = supabase.auth.sign_in_with_credentials({
+            "email": email,
+            "password": password
+        })
+        if response.user:
+            user = get_user_by_email(email)
             return True, user
-        return False, "Invalid password"
-    return False, "User not found"
+        return False, "Login failed"
+    except Exception as e:
+        return False, "Invalid credentials"
 
-def update_last_login(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?", (user_id,))
-    conn.commit()
-    conn.close()
+def verify_reset_token(token):
+    return None
 
 def create_reset_token(email):
     user = get_user_by_email(email)
     if user:
-        token = generate_token()
-        expires = datetime.now() + timedelta(hours=1)
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("""
-            UPDATE users SET reset_token = ?, reset_token_expires = ?
-            WHERE email = ?
-        """, (token, expires, email))
-        conn.commit()
-        conn.close()
-        return token, expires
+        token = f"reset_{user['id']}"
+        return token, datetime.now() + timedelta(hours=1)
     return None, None
 
-def verify_reset_token(token):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""
-        SELECT id FROM users
-        WHERE reset_token = ? AND reset_token_expires > ?
-    """, (token, datetime.now()))
-    user = c.fetchone()
-    conn.close()
-    return user[0] if user else None
-
 def reset_password(token, new_password):
-    user_id = verify_reset_token(token)
-    if user_id:
-        password_hash, _ = hash_password(new_password)
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("""
-            UPDATE users SET password_hash = ?, reset_token = NULL, reset_token_expires = NULL
-            WHERE id = ?
-        """, (password_hash, user_id))
-        conn.commit()
-        conn.close()
-        return True
     return False
 
-def update_prediction_count(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""
-        UPDATE users SET predictions_used = predictions_used + 1
-        WHERE id = ?
-    """, (user_id,))
-    conn.commit()
-    conn.close()
-
-def get_user_stats(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT predictions_used, subscription_tier FROM users WHERE id = ?", (user_id,))
-    stats = c.fetchone()
-    c.execute("SELECT COUNT(*) FROM prediction_logs WHERE user_id = ?", (user_id,))
-    logs = c.fetchone()[0]
-    conn.close()
-    return {"predictions_used": stats[0], "subscription_tier": stats[1], "total_predictions": logs}
-
 def send_reset_email(email, token, smtp_config=None):
-    if not smtp_config:
+    if not smtp_config or not smtp_config.get('server'):
         return False, "Email not configured"
     try:
         msg = MIMEMultipart()
@@ -174,15 +99,11 @@ def send_reset_email(email, token, smtp_config=None):
         msg['To'] = email
         msg['Subject'] = "Password Reset - CashFlow Predictor"
         body = f"""
-        <html>
-        <body>
-            <h2>Password Reset Request</h2>
-            <p>Click the link below to reset your password:</p>
-            <p><a href="{smtp_config['reset_url']}?token={token}">Reset Password</a></p>
-            <p>This link expires in 1 hour.</p>
-            <p>If you didn't request this, ignore this email.</p>
-        </body>
-        </html>
+        <html><body>
+            <h2>Password Reset</h2>
+            <p>Click to reset: <a href="{smtp_config['reset_url']}?token={token}">Reset Password</a></p>
+            <p>Expires in 1 hour.</p>
+        </body></html>
         """
         msg.attach(MIMEText(body, 'html'))
         with smtplib.SMTP(smtp_config['server'], smtp_config['port']) as server:
@@ -193,19 +114,111 @@ def send_reset_email(email, token, smtp_config=None):
     except Exception as e:
         return False, str(e)
 
-def change_subscription(user_id, tier):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("UPDATE users SET subscription_tier = ? WHERE id = ?", (tier, user_id))
-    conn.commit()
-    conn.close()
+def get_user_stats(user_id):
+    supabase = get_supabase_client()
+    if not supabase:
+        return {"predictions_used": 0, "subscription_tier": "free", "total_predictions": 0}
+    try:
+        response = supabase.table('users').select('*').eq('id', user_id).execute()
+        if response.data:
+            user = response.data[0]
+            return {
+                "predictions_used": user.get('predictions_used', 0),
+                "subscription_tier": user.get('subscription_tier', 'free'),
+                "total_predictions": user.get('predictions_used', 0)
+            }
+    except:
+        pass
+    return {"predictions_used": 0, "subscription_tier": "free", "total_predictions": 0}
+
+def update_prediction_count(user_id):
+    supabase = get_supabase_client()
+    if not supabase:
+        return
+    try:
+        stats = get_user_stats(user_id)
+        new_count = stats['predictions_used'] + 1
+        supabase.table('users').update({'predictions_used': new_count}).eq('id', user_id).execute()
+    except:
+        pass
 
 def delete_user(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("DELETE FROM prediction_logs WHERE user_id = ?", (user_id,))
-    c.execute("DELETE FROM users WHERE id = ?", (user_id,))
-    conn.commit()
-    conn.close()
+    supabase = get_supabase_client()
+    if supabase:
+        try:
+            supabase.table('users').delete().eq('id', user_id).execute()
+        except:
+            pass
 
-init_db()
+def change_subscription(user_id, tier):
+    supabase = get_supabase_client()
+    if supabase:
+        try:
+            supabase.table('users').update({'subscription_tier': tier}).eq('id', user_id).execute()
+        except:
+            pass
+
+# ============ PREDICTION HISTORY FUNCTIONS ============
+
+def save_prediction(user_id, file_name, prediction_data, conclusion):
+    """Save a prediction to history"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return False
+    
+    try:
+        prediction_record = {
+            "user_id": user_id,
+            "file_name": file_name,
+            "prediction_days": prediction_data.get('days', 30),
+            "current_balance": prediction_data.get('current_balance', 0),
+            "predicted_balance": prediction_data.get('predicted_balance', 0),
+            "trend": prediction_data.get('trend', 'stable'),
+            "status": conclusion.get('status', 'neutral'),
+            "conclusion": conclusion.get('title', ''),
+            "created_at": datetime.now().isoformat()
+        }
+        supabase.table('prediction_logs').insert(prediction_record).execute()
+        
+        # Update user prediction count
+        update_prediction_count(user_id)
+        return True
+    except Exception as e:
+        print(f"Error saving prediction: {e}")
+        return False
+
+def get_prediction_history(user_id, limit=20):
+    """Get user's prediction history"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return []
+    
+    try:
+        response = supabase.table('prediction_logs').select('*').eq('user_id', user_id).order('created_at', desc=True).limit(limit).execute()
+        return response.data if response.data else []
+    except:
+        return []
+
+def get_prediction_by_id(log_id, user_id):
+    """Get a specific prediction by ID"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return None
+    
+    try:
+        response = supabase.table('prediction_logs').select('*').eq('id', log_id).eq('user_id', user_id).execute()
+        return response.data[0] if response.data else None
+    except:
+        return None
+
+def delete_prediction(log_id, user_id):
+    """Delete a prediction from history"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return False
+    
+    try:
+        supabase.table('prediction_logs').delete().eq('id', log_id).eq('user_id', user_id).execute()
+        return True
+    except:
+        return False
