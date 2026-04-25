@@ -324,18 +324,20 @@ def history_ui():
         display_df['predicted_balance'] = display_df['predicted_balance'].apply(lambda x: f"${x:,.2f}" if x else "$0")
         st.dataframe(display_df, use_container_width=True)
         
-        status_icons = {'excellent': '🟢', 'good': '🟢', 'stable': '🟡', 'warning': '🟠', 'critical': '🔴', 'neutral': '⚪'}
-        st.markdown("### 📈 Status Overview")
-        
+status_icons = {'excellent': 'Green', 'good': 'Green', 'stable': 'Yellow', 'warning': 'Orange', 'critical': 'Red', 'neutral': 'Gray'}
         for idx, row in enumerate(history[:5]):
             status = row.get('status', 'neutral')
-            icon = status_icons.get(status, '⚪')
-            trend_icon = '📈' if row.get('trend') == 'up' else '📉'
+            icon = status_icons.get(status, 'Gray')
+            trend_icon = 'Up' if row.get('trend') == 'up' else 'Down'
+            file_name = row.get('file_name', 'N/A')
+            created = row.get('created_at', 'N/A')
+            days = row.get('prediction_days', 30)
+            conclusion = row.get('conclusion', 'N/A')
             st.markdown(f"""
             <div style="background: {COLORS['light_bg']}; border-left: 4px solid {COLORS['primary']}; padding: 15px; border-radius: 5px; margin: 10px 0;">
-                <strong>{icon} {row.get('conclusion', 'N/A')}</strong><br>
-                📁 {row.get('file_name', 'N/A')} | {trend_icon} {row.get('trend', 'stable').upper()}<br>
-                📅 {row.get('created_at', 'N/A')} | {row.get('prediction_days', 30)} days
+                <strong>{icon} {conclusion}</strong><br>
+                File: {file_name} | Trend: {trend_icon}<br>
+                Date: {created} | Days: {days}
             </div>
             """, unsafe_allow_html=True)
     
@@ -347,136 +349,136 @@ def apply_theme():
     COLORS = get_colors()
     st.markdown(
         f"""
-        <style>
-        /* Mobile Optimization */
-        @media (max-width: 768px) {{
-            .stApp {{
-                padding: 0 !important;
-            }}
-            .main-header {{
-                padding: 15px !important;
-                margin-bottom: 10px !important;
-            }}
-            .main-header h1 {{
-                font-size: 24px !important;
-            }}
-            div[data-testid="stMetric"] {{
-                padding: 10px !important;
-            }}
-            .stButton>button {{
-                padding: 8px 15px !important;
-                font-size: 14px !important;
-            }}
-        }}
-        /* Mobile Touch Optimization */
-        @media (hover: none) {{
-            button {{ 
-                min-height: 44px;
-                touch-action: manipulation;
-            }}
-            .stDownloadButton > button {{
-                min-height: 48px;
-            }}
-        }}
-        .stApp {{
-            background-color: {COLORS["background"]};
-            -webkit-tap-highlight-color: transparent;
-        }}
-        .main-header {{
-            background: linear-gradient(135deg, {COLORS["primary"]}, {COLORS["secondary"]});
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-        }}
-        .main-header h1 {{
-            color: white !important;
-            margin: 0;
-            font-size: 32px;
-            font-weight: bold;
-        }}
-        .main-header p {{
-            color: {COLORS["accent"]};
-            margin: 5px 0 0 0;
-        }}
-        .stSidebar {{
-            background-color: {COLORS["light_bg"]};
-            width: 280px !important;
-        }}
-        .upload-zone {{
-            border: 3px dashed {COLORS["primary"]};
-            border-radius: 15px;
-            padding: 40px;
-            text-align: center;
-            background-color: {COLORS["light_bg"]};
-            margin: 20px 0;
-        }}
-        .insight-box {{
-            background: {COLORS["light_bg"]};
-            border-left: 4px solid {COLORS["primary"]};
-            padding: 15px;
-            border-radius: 5px;
-            margin: 10px 0;
-        }}
-        div[data-testid="stMetric"] {{
-            background-color: {COLORS["light_bg"]};
-            border: 1px solid {COLORS["accent"]};
-            border-radius: 10px;
-            padding: 15px;
-        }}
-        div[data-testid="stMetric"] label {{
-            color: {COLORS["primary"]} !important;
-        }}
-        div[data-testid="stMetric"] div[data-testid="stMetricValue"] {{
-            color: {COLORS["text"]} !important;
-        }}
-        .stButton>button {{
-            background: linear-gradient(135deg, {COLORS["primary"]}, {COLORS["secondary"]});
-            color: white;
-            border: none;
-            border-radius: 8px;
-            padding: 10px 25px;
-        }}
-        .stButton>button:hover {{
-            background: linear-gradient(135deg, {COLORS["secondary"]}, {COLORS["primary"]});
-        }}
-        .goal-box {{
-            background: linear-gradient(135deg, {COLORS["primary"]}10, {COLORS["secondary"]}10);
-            border: 2px solid {COLORS["primary"]};
-            border-radius: 10px;
-            padding: 15px;
-            margin: 10px 0;
-        }}
-        .anomaly-alert {{
-            background: #FFF3CD;
-            border-left: 4px solid #FFC107;
-            padding: 10px 15px;
-            border-radius: 5px;
-            margin: 5px 0;
-        }}
-        .loading-spinner {{
-            border: 3px solid {COLORS["light_bg"]};
-            border-top: 3px solid {COLORS["primary"]};
-            border-radius: 50%;
-            width: 30px;
-            height: 30px;
-            animation: spin 1s linear infinite;
-        }}
-        @keyframes spin {{
-            0% {{ transform: rotate(0deg); }}
-            100% {{ transform: rotate(360deg); }}
-        }}
-        /* Mobile Sticky Header */
-        .st-emotion-cache-1w0r9p2 {{
-            position: sticky !important;
-            top: 0 !important;
-            z-index: 100 !important;
-        }}
-        /* Mobile Charts */
-        .js-plotly-plot {{
-            max-width: 100% !important;
-        }}
-        </style>
-        """,
+<style>
+         /* Mobile Optimization */
+         @media (max-width: 768px) {
+             .stApp {
+                 padding: 0 !important;
+             }
+             .main-header {
+                 padding: 15px !important;
+                 margin-bottom: 10px !important;
+             }
+             .main-header h1 {
+                 font-size: 24px !important;
+             }
+             div[data-testid="stMetric"] {
+                 padding: 10px !important;
+             }
+             .stButton>button {
+                 padding: 8px 15px !important;
+                 font-size: 14px !important;
+             }
+         }
+         /* Mobile Touch Optimization */
+         @media (hover: none) {
+             button { 
+                 min-height: 44px;
+                 touch-action: manipulation;
+             }
+             .stDownloadButton > button {
+                 min-height: 48px;
+             }
+         }
+         .stApp {
+             background-color: BACKGROUND;
+             -webkit-tap-highlight-color: transparent;
+         }
+         .main-header {
+             background: linear-gradient(135deg, PRIMARY, SECONDARY);
+             padding: 20px;
+             border-radius: 10px;
+             margin-bottom: 20px;
+         }
+         .main-header h1 {
+             color: white !important;
+             margin: 0;
+             font-size: 32px;
+             font-weight: bold;
+         }
+         .main-header p {
+             color: ACCENT;
+             margin: 5px 0 0 0;
+         }
+         .stSidebar {
+             background-color: LIGHT_BG;
+             width: 280px !important;
+         }
+         .upload-zone {
+             border: 3px dashed PRIMARY;
+             border-radius: 15px;
+             padding: 40px;
+             text-align: center;
+             background-color: LIGHT_BG;
+             margin: 20px 0;
+         }
+         .insight-box {
+             background: LIGHT_BG;
+             border-left: 4px solid PRIMARY;
+             padding: 15px;
+             border-radius: 5px;
+             margin: 10px 0;
+         }
+         div[data-testid="stMetric"] {
+             background-color: LIGHT_BG;
+             border: 1px solid ACCENT;
+             border-radius: 10px;
+             padding: 15px;
+         }
+         div[data-testid="stMetric"] label {
+             color: PRIMARY !important;
+         }
+         div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+             color: TEXT !important;
+         }
+         .stButton>button {
+             background: linear-gradient(135deg, PRIMARY, SECONDARY);
+             color: white;
+             border: none;
+             border-radius: 8px;
+             padding: 10px 25px;
+         }
+         .stButton>button:hover {
+             background: linear-gradient(135deg, SECONDARY, PRIMARY);
+         }
+         .goal-box {
+             background: rgba(PRIMARY, 0.1);
+             border: 2px solid PRIMARY;
+             border-radius: 10px;
+             padding: 15px;
+             margin: 10px 0;
+         }
+         .anomaly-alert {
+             background: #FFF3CD;
+             border-left: 4px solid #FFC107;
+             padding: 10px 15px;
+             border-radius: 5px;
+             margin: 5px 0;
+         }
+         .loading-spinner {
+             border: 3px solid LIGHT_BG;
+             border-top: 3px solid PRIMARY;
+             border-radius: 50%;
+             width: 30px;
+             height: 30px;
+             animation: spin 1s linear infinite;
+         }
+         @keyframes spin {
+             0% { transform: rotate(0deg); }
+             100% { transform: rotate(360deg); }
+         }
+         /* Mobile Sticky Header */
+         .st-emotion-cache-1w0r9p2 {
+             position: sticky !important;
+             top: 0 !important;
+             z-index: 100 !important;
+         }
+         /* Mobile Charts */
+         .js-plotly-plot {
+             max-width: 100% !important;
+         }
+         </style>
+        """.replace("BACKGROUND", COLORS["background"]).replace("PRIMARY", COLORS["primary"]).replace("SECONDARY", COLORS["secondary"]).replace("ACCENT", COLORS["accent"]).replace("LIGHT_BG", COLORS["light_bg"]).replace("TEXT", COLORS["text"]),
         unsafe_allow_html=True,
     )
 
